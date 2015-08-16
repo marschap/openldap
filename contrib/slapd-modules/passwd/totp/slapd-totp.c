@@ -29,8 +29,27 @@
 /* include socket.h to get sys/types.h and/or winsock2.h */
 #include <ac/socket.h>
 
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
+#ifdef HAVE_OPENSSL
+# include <openssl/sha.h>
+# include <openssl/hmac.h>
+
+# define TOTP_SHA512_DIGEST_LENGTH	SHA512_DIGEST_LENGTH
+
+# define TOTP_sha1			EVP_sha1()
+# define TOTP_sha256			EVP_sha256()
+# define TOTP_sha512			EVP_sha512()
+
+#elif HAVE_GNUTLS
+# include <nettle/hmac.h>
+
+# define TOTP_SHA512_DIGEST_LENGTH	SHA512_DIGEST_SIZE
+
+# define TOTP_sha1			&nettle_sha1
+# define TOTP_sha256			&nettle_sha256
+# define TOTP_sha512			&nettle_sha512
+#else
+# error Unsupported crypto backend.
+#endif
 
 #include "slap.h"
 #include "config.h"
@@ -285,10 +304,6 @@ totp_b32_pton(
 
 /* RFC6238 TOTP */
 
-#define HMAC_setup(ctx, key, len, hash)	HMAC_CTX_init(&ctx); HMAC_Init_ex(&ctx, key, len, hash, 0)
-#define HMAC_crunch(ctx, buf, len)	HMAC_Update(&ctx, buf, len)
-#define HMAC_finish(ctx, dig, dlen)	HMAC_Final(&ctx, dig, &dlen); HMAC_CTX_cleanup(&ctx)
-
 typedef struct myval {
 	ber_len_t mv_len;
 	void *mv_val;
@@ -300,13 +315,27 @@ static void do_hmac(
 	myval *data,
 	myval *out)
 {
+#ifdef HAVE_OPENSSL
 	HMAC_CTX ctx;
 	unsigned int digestLen;
 
-	HMAC_setup(ctx, key->mv_val, key->mv_len, hash);
-	HMAC_crunch(ctx, data->mv_val, data->mv_len);
-	HMAC_finish(ctx, out->mv_val, digestLen);
+	HMAC_CTX_init(&ctx);
+	HMAC_Init_ex(&ctx, key->mv_val, key->mv_len, hash, 0);
+	HMAC_Update(&ctx, data->mv_val, data->mv_len);
+	HMAC_Final(&ctx, out->mv_val, &digestLen);
+	HMAC_CTX_cleanup(&ctx);
+
 	out->mv_len = digestLen;
+#elif HAVE_GNUTLS
+	struct hmac_sha512_ctx ctx;	/* large enough for SHA-1, SHA-256 and SHA-512 */
+	const struct nettle_hash *h = hash;
+
+	out->mv_len = h->digest_size;
+
+	hmac_set_key(&ctx.outer, &ctx.inner, &ctx.state, hash, key->mv_len, key->mv_val);
+	hmac_update(&ctx.state, hash, data->mv_len, data->mv_val);
+	hmac_digest(&ctx.outer, &ctx.inner, &ctx.state, hash, out->mv_len, out->mv_val);
+#endif
 }
 
 static const int DIGITS_POWER[] = {
@@ -319,7 +348,7 @@ static void generate(
 	myval *out,
 	const void *mech)
 {
-	unsigned char digest[SHA512_DIGEST_LENGTH];
+	unsigned char digest[TOTP_SHA512_DIGEST_LENGTH];
 	myval digval;
 	myval data;
 	unsigned char msg[8];
@@ -443,7 +472,7 @@ static int chk_totp1(
 	const struct berval *cred,
 	const char **text)
 {
-	return chk_totp(passwd, cred, EVP_sha1(), text);
+	return chk_totp(passwd, cred, TOTP_sha1, text);
 }
 
 static int chk_totp256(
@@ -452,7 +481,7 @@ static int chk_totp256(
 	const struct berval *cred,
 	const char **text)
 {
-	return chk_totp(passwd, cred, EVP_sha256(), text);
+	return chk_totp(passwd, cred, TOTP_sha256, text);
 }
 
 static int chk_totp512(
@@ -461,7 +490,7 @@ static int chk_totp512(
 	const struct berval *cred,
 	const char **text)
 {
-	return chk_totp(passwd, cred, EVP_sha512(), text);
+	return chk_totp(passwd, cred, TOTP_sha512, text);
 }
 
 static int passwd_string32(
