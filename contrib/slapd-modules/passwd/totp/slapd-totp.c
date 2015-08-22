@@ -176,6 +176,9 @@ totp_b32_pton(
 		if (ch == Pad32)
 			break;
 
+		/* be flexible in what we accept */
+		ch = toupper((unsigned char) ch);
+
 		pos = strchr(Base32, ch);
 		if (pos == 0) 		/* A non-base32 character. */
 			return (-1);
@@ -293,13 +296,6 @@ totp_b32_pton(
 		 * they become a subliminal channel.
 		 */
 		if (target && target[tarindex] != 0)
-			return (-1);
-	} else {
-		/*
-		 * We ended by seeing the end of the string.  Make sure we
-		 * have no partial bytes lying around.
-		 */
-		if (state != 0)
 			return (-1);
 	}
 
@@ -441,18 +437,24 @@ static int chk_totp(
 	be_entry_release_r(op, e);
 	if (rc) return rc;
 
-	/* Key is stored in base32 */
-	key.mv_len = passwd->bv_len * 5 / 8;
-	key.mv_val = ber_memalloc(key.mv_len+1);
+	/* Key is stored in base32: first calculate the space necessary ... */
+	rc = totp_b32_pton(passwd->bv_val, NULL, passwd->bv_len);
+	if (rc < 1)
+		return LUTIL_PASSWD_ERR;
+
+	key.mv_len = rc;
+	key.mv_val = ber_memalloc(key.mv_len+2);
 
 	if (!key.mv_val)
 		return LUTIL_PASSWD_ERR;
 
-	rc = totp_b32_pton(passwd->bv_val, key.mv_val, key.mv_len);
+	/* ... then get the key decoded */
+	rc = totp_b32_pton(passwd->bv_val, key.mv_val, key.mv_len+1);
 	if (rc < 1) {
 		rc = LUTIL_PASSWD_ERR;
 		goto out;
 	}
+	key.mv_len = rc;
 
 	out.mv_val = outbuf;
 	out.mv_len = sizeof(outbuf);
