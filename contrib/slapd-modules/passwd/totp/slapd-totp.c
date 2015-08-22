@@ -20,6 +20,10 @@
 
 #include <portable.h>
 
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif /* HAVE_STDINT_H */
+
 #include <lber.h>
 #include <lber_pvt.h>
 #include "lutil.h"
@@ -343,7 +347,7 @@ static const int DIGITS_POWER[] = {
 
 static void generate(
 	myval *key,
-	unsigned long tval,
+	uint64_t tval,
 	int digits,
 	myval *out,
 	const void *mech)
@@ -351,15 +355,17 @@ static void generate(
 	unsigned char digest[TOTP_SHA512_DIGEST_LENGTH];
 	myval digval;
 	myval data;
-	unsigned char msg[8];
+	unsigned char msg[8];	/* sizeof(uint64_t) */
 	int i, offset, res, otp;
 
 #if !WORDS_BIGENDIAN
 	/* only needed on little-endian, can just use tval directly on big-endian */
-	for (i=7; i>=0; i--) {
+	for (i=sizeof(uint64_t)-1; i>=0; i--) {
 		msg[i] = tval & 0xff;
 		tval >>= 8;
 	}
+#else
+	memcpy(msg, &tval, sizeof(uint64_t));
 #endif
 
 	data.mv_val = msg;
